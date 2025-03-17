@@ -10,7 +10,7 @@
 
 ---
 
-![Modules Overview](modules.png)
+!https://github.com/probablyvivek/cfc/blob/main/Modules.png?raw=true
 
 ## Main Focus: **Load Demand + Recovery**
 For this competition, we will analyze and visualize **two critical aspects** of player performance:
