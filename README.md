@@ -15,10 +15,15 @@
 For this competition, we will analyze and visualize **two critical aspects** of player performance:
 
 1. **Load Demand**
+
+![GPS](https://github.com/probablyvivek/cfc/blob/main/images/GPS.png?raw=True)
+
    - **Key Metrics**: Distance covered, speed zones, acceleration/deceleration, workload intensity.
    - **Objective**: Assess the **physical strain on players** during matches & training.
 
 2. **Recovery**
+
+![Recovery](https://github.com/probablyvivek/cfc/blob/main/images/Recovery.png?raw=True)
    - **Key Metrics**: Sleep quality, muscle soreness, biomarker analysis, recovery scores.
    - **Objective**: Track **how well players recover** after high-intensity sessions & optimize readiness.
 
