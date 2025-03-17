@@ -9,8 +9,7 @@
 - Your work can have a **real-world impact** on professional football performance analysis.
 
 ---
-
-!https://github.com/probablyvivek/cfc/blob/main/Modules.png?raw=true
+![Modules Overview](https://github.com/probablyvivek/cfc/blob/main/images/Modules.png?raw=true)
 
 ## Main Focus: **Load Demand + Recovery**
 For this competition, we will analyze and visualize **two critical aspects** of player performance:
