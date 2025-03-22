@@ -51,10 +51,10 @@ Each recovery category includes two metrics:
 We’re building a focused, player-first experience centered around the Recovery module.
 
 Our project will highlight:
-- 📈 **Recovery Trends** — via EMBOSS score and microcycle insights
-- 🧬 **Category Snapshots** — composite & completeness by type (e.g. soreness, sleep)
-- 🔔 **Contextual Nudges** — subtle but powerful coach/player alerts
-- 🧩 **Functional Simplicity** — clean visual language and minimal clicks
+- **Recovery Trends** — via EMBOSS score and microcycle insights
+- **Category Snapshots** — composite & completeness by type (e.g. soreness, sleep)
+- **Contextual Nudges** — subtle but powerful coach/player alerts
+- **Functional Simplicity** — clean visual language and minimal clicks
 
 The interface will be developed **entirely in Python** using:
 - **Flask + React** for a fast, modular web app
