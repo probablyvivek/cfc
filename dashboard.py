@@ -158,16 +158,14 @@ def render_metrics(filtered_df, risk_threshold):
     
     return below
 
-# === Status Box ===
-def render_status_box(below):
-    status_color = THEME['ACCENT'] if below >= 3 else (THEME['WARNING'] if below >= 1 else THEME['SUCCESS'])
-    status_text = (
-        "⚠️ High Risk: Recommend rest/recovery."
-        if below >= 3 else
-        "🟠 Moderate Risk: Monitor closely."
-        if below >= 1 else
-        "✅ Optimal: Continue current load."
-    )
+# In dashboard.py
+def render_status_box(filtered_df, risk_threshold):
+    # Get recommendations from the analysis module
+    recent_data = filtered_df.tail(7)  # Last 7 days
+    recommendations = get_recommendations(recent_data, risk_threshold)
+    
+    status_color = THEME['ACCENT'] if recommendations['status'] == 'high_risk' else (THEME['WARNING'] if recommendations['status'] == 'moderate_risk' else THEME['SUCCESS'])
+    status_text = recommendations['title']
 
     st.markdown(f"""
     <div class="status-box" style="background-color:{status_color}20; border-left:5px solid {status_color}">
@@ -317,7 +315,7 @@ def main():
     below = render_metrics(filtered_df, risk_threshold)
     
     # Render status box
-    render_status_box(below)
+    render_status_box(filtered_df, risk_threshold)
     
     # Create main content columns
     left_col, right_col = st.columns([2, 1])
