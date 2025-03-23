@@ -1,4 +1,3 @@
-# analysis.py
 """
 Functions for analyzing player recovery data with advanced physiotherapy
 and workload management principles.
@@ -165,7 +164,7 @@ def analyze_workload_progression(player_data, current_week_data, risk_threshold)
     Returns:
     dict: Workload analysis and recommendations
     """
-    # Get recent 4 weeks of data for acute:chronic ratio
+    # Get recent 4 weeks of data for acute chronic ratio
     if len(player_data) < 28:
         return {
             "status": "insufficient_data",
@@ -197,7 +196,7 @@ def analyze_workload_progression(player_data, current_week_data, risk_threshold)
     if acwr > 1.5:
         return {
             "status": "high_spike",
-            "title": "⚠️ High Acute:Chronic Workload Ratio",
+            "title": "⚠️ High Acute Chronic Workload Ratio",
             "acwr": acwr,
             "week_change": week_change,
             "recommendations": [
@@ -211,7 +210,7 @@ def analyze_workload_progression(player_data, current_week_data, risk_threshold)
     elif acwr < 0.8:
         return {
             "status": "detraining_risk",
-            "title": "⚙️ Low Acute:Chronic Workload Ratio",
+            "title": "⚙️ Low Acute Chronic Workload Ratio",
             "acwr": acwr,
             "week_change": week_change,
             "recommendations": [

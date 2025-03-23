@@ -1,4 +1,3 @@
-# team_readiness.py
 """
 Functions for assessing team readiness and generating match-day squad recommendations.
 """
@@ -35,6 +34,28 @@ PLAYER_POSITIONS = {
     "Christopher Nkunku": "FWD"
 }
 
+# Helper function to check if a player is available for selection
+def player_is_available(player):
+    """
+    Check if a player is available for selection based on readiness or status
+    
+    Parameters:
+    player (dict): Player data dictionary
+    
+    Returns:
+    bool: True if player is available, False otherwise
+    """
+    # If max_minutes is available, use it
+    if "max_minutes" in player:
+        return player["max_minutes"] > 0
+    
+    # Otherwise use status
+    if "status" in player:
+        return player["status"] != "rest"
+    
+    # Fallback to readiness score
+    return player["readiness_score"] >= 30  # Same threshold as "bench" status
+
 def calculate_player_readiness(player_data, risk_threshold, match_date=None):
     """
     Calculate player's match readiness based on recent recovery data
@@ -64,7 +85,9 @@ def calculate_player_readiness(player_data, risk_threshold, match_date=None):
             "risk_days": 0,
             "trend": 0,
             "recommendation": "Insufficient Data",
-            "status": "unknown"
+            "status": "unknown",
+            "max_minutes": 0,
+            "position": PLAYER_POSITIONS.get(player_data["player_name"].iloc[0] if len(player_data) > 0 else "Unknown", "Unassigned")
         }
     
     # Calculate key metrics
@@ -84,7 +107,6 @@ def calculate_player_readiness(player_data, risk_threshold, match_date=None):
     variability = recent_data["emboss_baseline_score"].std() if len(recent_data) > 1 else 0
     
     # Calculate weighted readiness score (0-100)
-    # This formula weights recent scores more heavily, prioritizes trend, and penalizes for risk days
     latest_weight = 0.4
     avg_weight = 0.3
     trend_weight = 0.2
@@ -116,32 +138,41 @@ def calculate_player_readiness(player_data, risk_threshold, match_date=None):
     # Apply penalties
     readiness_score = max(0, readiness_score - (risk_penalty * 20) - (variability_factor * 10))
     
-    # Determine recommendation
-    if readiness_score >= 85:
+    # Determine recommendation and max minutes
+    if readiness_score >= 75:
         recommendation = "Full Training & Match"
         status = "optimal"
-    elif readiness_score >= 70:
+        max_minutes = 90
+    elif readiness_score >= 60:
         recommendation = "Full Match"
         status = "ready"
-    elif readiness_score >= 55:
+        max_minutes = 90
+    elif readiness_score >= 45:
         recommendation = "Limited Minutes (60-70)"
         status = "limited"
-    elif readiness_score >= 40:
+        max_minutes = 60
+    elif readiness_score >= 30:
         recommendation = "Bench Option"
         status = "bench"
+        max_minutes = 30
     else:
         recommendation = "Rest/Recovery"
         status = "rest"
+        max_minutes = 0
+    
+    # Get player name safely
+    player_name = player_data["player_name"].iloc[0]
     
     return {
-        "player_name": player_data["player_name"].iloc[0],
+        "player_name": player_name,
         "readiness_score": readiness_score,
         "recent_avg": recent_avg,
         "risk_days": risk_days,
         "trend": trend,
         "recommendation": recommendation,
         "status": status,
-        "position": PLAYER_POSITIONS.get(player_data["player_name"].iloc[0], "Unassigned")
+        "position": PLAYER_POSITIONS.get(player_name, "Unassigned"),
+        "max_minutes": max_minutes
     }
 
 def get_squad_recommendations(all_player_data, risk_threshold, match_date=None):
@@ -169,10 +200,16 @@ def get_squad_recommendations(all_player_data, risk_threshold, match_date=None):
     player_readiness.sort(key=lambda x: x["readiness_score"], reverse=True)
     
     # Group players by position
-    position_groups = {"GK": [], "DEF": [], "MID": [], "FWD": []}
+    position_groups = {"GK": [], "DEF": [], "MID": [], "FWD": [], "Unassigned": []}
     
     for player in player_readiness:
         position = player["position"]
+        # Make sure position is one of our known categories
+        if position not in position_groups:
+            # If position is unknown, categorize as "Unassigned"
+            position = "Unassigned"
+            player["position"] = position
+        
         position_groups[position].append(player)
     
     # Start with the best goalkeeper
@@ -184,41 +221,58 @@ def get_squad_recommendations(all_player_data, risk_threshold, match_date=None):
         starting_xi.append(position_groups["GK"][0])
         # Any other GKs go to bench
         for gk in position_groups["GK"][1:]:
-            if len(bench) < 7 and gk["recommendation"] != "Rest/Recovery":
+            if len(bench) < 7 and player_is_available(gk):
                 bench.append(gk)
     
     # Select 4 defenders with highest readiness
-    for defender in position_groups["DEF"][:4]:
-        if defender["recommendation"] != "Rest/Recovery":
+    defender_count = min(4, len(position_groups["DEF"]))
+    for defender in position_groups["DEF"][:defender_count]:
+        if player_is_available(defender):
             starting_xi.append(defender)
     
     # Add other defenders to bench
-    for defender in position_groups["DEF"][4:]:
-        if len(bench) < 7 and defender["recommendation"] != "Rest/Recovery":
+    for defender in position_groups["DEF"][defender_count:]:
+        if len(bench) < 7 and player_is_available(defender):
             bench.append(defender)
     
     # Select 3-4 midfielders with highest readiness
     mid_count = min(4, len(position_groups["MID"]))
     for midfielder in position_groups["MID"][:mid_count]:
-        if midfielder["recommendation"] != "Rest/Recovery":
+        if player_is_available(midfielder):
             starting_xi.append(midfielder)
     
     # Add other midfielders to bench
     for midfielder in position_groups["MID"][mid_count:]:
-        if len(bench) < 7 and midfielder["recommendation"] != "Rest/Recovery":
+        if len(bench) < 7 and player_is_available(midfielder):
             bench.append(midfielder)
     
     # Select 2-3 forwards with highest readiness
     # If we don't have enough starting XI players yet, add more forwards
     fwd_count = min(3, len(position_groups["FWD"]))
     for forward in position_groups["FWD"][:fwd_count]:
-        if forward["recommendation"] != "Rest/Recovery":
+        if player_is_available(forward):
             starting_xi.append(forward)
     
     # Add other forwards to bench
     for forward in position_groups["FWD"][fwd_count:]:
-        if len(bench) < 7 and forward["recommendation"] != "Rest/Recovery":
+        if len(bench) < 7 and player_is_available(forward):
             bench.append(forward)
+    
+    # Handle unassigned players based on readiness
+    # First add to starting XI if needed
+    unassigned_index = 0
+    while len(starting_xi) < 11 and unassigned_index < len(position_groups["Unassigned"]):
+        player = position_groups["Unassigned"][unassigned_index]
+        if player_is_available(player):
+            starting_xi.append(player)
+        unassigned_index += 1
+    
+    # Then add to bench if needed
+    while len(bench) < 7 and unassigned_index < len(position_groups["Unassigned"]):
+        player = position_groups["Unassigned"][unassigned_index]
+        if player_is_available(player):
+            bench.append(player)
+        unassigned_index += 1
     
     # Ensure we have 11 starting players:
     # If we have less than 11, add more players from the bench
@@ -234,7 +288,7 @@ def get_squad_recommendations(all_player_data, risk_threshold, match_date=None):
             bench.append(player_to_bench)
     
     # Sort starting XI by position for display
-    position_order = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
+    position_order = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3, "Unassigned": 4}
     starting_xi.sort(key=lambda x: position_order.get(x["position"], 4))
     
     # Find unavailable players
@@ -245,10 +299,33 @@ def get_squad_recommendations(all_player_data, risk_threshold, match_date=None):
         if player not in all_selected_players:
             unavailable.append(player)
     
+    # Check for tactical position coverage on bench (safely)
+    try:
+        positions_covered = {
+            "GK": any(p["position"] == "GK" for p in bench),
+            "DEF": any(p["position"] == "DEF" for p in bench),
+            "MID": any(p["position"] == "MID" for p in bench),
+            "FWD": any(p["position"] == "FWD" for p in bench)
+        }
+    except:
+        positions_covered = {
+            "GK": False,
+            "DEF": False,
+            "MID": False,
+            "FWD": False
+        }
+    
+    # Calculate team-level stats
+    improving_count = sum(1 for p in player_readiness if p["trend"] > 0)
+    declining_count = sum(1 for p in player_readiness if p["trend"] < 0)
+    
     return {
         "starting_xi": starting_xi,
         "bench": bench,
-        "unavailable": unavailable
+        "unavailable": unavailable,
+        "positions_covered": positions_covered,
+        "improving_count": improving_count,
+        "declining_count": declining_count
     }
 
 def create_team_readiness_chart(player_readiness_data):
@@ -262,7 +339,7 @@ def create_team_readiness_chart(player_readiness_data):
     plotly.graph_objects.Figure: Plotly figure object
     """
     # Sort players by readiness score
-    sorted_data = sorted(player_readiness_data, key=lambda x: x["readiness_score"])
+    sorted_data = sorted(player_readiness_data, key=lambda x: x["readiness_score"], reverse=True)
     
     # Extract player names and scores
     player_names = [f"{p['player_name']} ({p['position']})" if 'position' in p else p['player_name'] 
@@ -324,11 +401,11 @@ def create_team_readiness_chart(player_readiness_data):
     
     # Add colored regions for different readiness levels
     readiness_levels = [
-        {"range": [0, 40], "color": "rgba(230,57,70,0.1)", "label": "Rest"},
-        {"range": [40, 55], "color": "rgba(230,126,57,0.1)", "label": "Bench"},
-        {"range": [55, 70], "color": "rgba(244,162,97,0.1)", "label": "Limited"},
-        {"range": [70, 85], "color": "rgba(136,192,84,0.1)", "label": "Ready"},
-        {"range": [85, 100], "color": "rgba(42,157,143,0.1)", "label": "Optimal"}
+        {"range": [0, 30], "color": "rgba(230,57,70,0.1)", "label": "Rest"},
+        {"range": [30, 45], "color": "rgba(230,126,57,0.1)", "label": "Bench"},
+        {"range": [45, 60], "color": "rgba(244,162,97,0.1)", "label": "Limited"},
+        {"range": [60, 75], "color": "rgba(136,192,84,0.1)", "label": "Ready"},
+        {"range": [75, 100], "color": "rgba(42,157,143,0.1)", "label": "Optimal"}
     ]
     
     # Add shapes and annotations for readiness levels
@@ -365,32 +442,45 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
     all_player_data (DataFrame): Recovery data for all players
     risk_threshold (float): Threshold for determining risk
     """
+    # Add explanation text to the sidebar
+    with st.sidebar:
+        st.markdown("## How It Works:")
+        st.markdown("""
+        ✅ **Recovery Data Analysis**: The system analyzes each player's recovery trends over the past 7 days.
+        
+        📊 **Readiness Score Calculation**: A composite readiness score (0-100%) is calculated based on:
+        * Recent EMBOSS score average
+        * Most recent score
+        * Recovery trend (improving/declining)
+        * Score stability/variability
+        * Days below risk threshold
+        
+        🏟️ **Match Day Selection**: The system recommends an optimal starting XI and bench options based on physiological readiness.
+        """)
+    
+    # Add legends on the right side using an expander
+    with st.expander("**Readiness Categories:**", expanded=True):
+        st.markdown("""
+        * **75-100%**: Optimal - Full Training & Match
+        * **60-75%**: Ready - Full Match
+        * **45-60%**: Limited - Reduced Minutes (60-70)
+        * **30-45%**: Bench Option - Limited Impact Sub
+        * **Below 40%**: Rest/Recovery Required
+        """)
+    
     st.markdown("## Match Day Readiness Assessment")
     
-    # Dashboard controls
-    col1, col2 = st.columns([1, 1])
+    # Dashboard controls - simplified to only show match date
+    # Match date selection (default to tomorrow)
+    tomorrow = datetime.now().date() + timedelta(days=1)
+    match_date = st.date_input(
+        "Match Date", 
+        value=tomorrow,
+        min_value=datetime.now().date(),
+        max_value=datetime.now().date() + timedelta(days=14)
+    )
     
-    with col1:
-        # Match date selection (default to tomorrow)
-        tomorrow = datetime.now().date() + timedelta(days=1)
-        match_date = st.date_input(
-            "Match Date", 
-            value=tomorrow,
-            min_value=datetime.now().date(),
-            max_value=datetime.now().date() + timedelta(days=14)
-        )
-    
-    with col2:
-        # Readiness threshold adjustment
-        readiness_threshold = st.slider(
-            "Minimum Readiness for Selection",
-            min_value=50,
-            max_value=80,
-            value=65,
-            step=5
-        )
-    
-    # Generate squad recommendations
+    # Generate squad recommendations using risk_threshold from sidebar
     squad_recommendations = get_squad_recommendations(
         all_player_data,
         risk_threshold,
@@ -413,10 +503,10 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
     col1, col2, col3, col4 = st.columns(4)
     
     positions = [
-        ("GK", col1, "#3366FF"),  # Yellow for GK
+        ("GK", col1, "#3366FF"),  # Blue for GK
         ("DEF", col2, "#3366FF"),  # Blue for DEF
-        ("MID", col3, "#3366FF"),  # Green for MID
-        ("FWD", col4, "#3366FF")   # Red for FWD
+        ("MID", col3, "#3366FF"),  # Blue for MID
+        ("FWD", col4, "#3366FF")   # Blue for FWD
     ]
     
     for position, col, color in positions:
@@ -435,21 +525,29 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
                 st.markdown(
                     f"""
                     <div style="
-                        background-color: {color}20;
-                        border-left: 4px solid {color};
+                        position: relative;
+                        background-color: rgba(230, 240, 255, 1);
                         padding: 8px 12px;
+                        padding-left: 16px;
                         margin-bottom: 8px;
                         border-radius: 4px;
+                        text-align: left;
+                        overflow: hidden;
                     ">
-                        <div style="font-weight: bold; font-size: 15px;">
+                        <div style="
+                            position: absolute;
+                            top: 0;
+                            left: 0;
+                            width: 6px;
+                            height: 100%;
+                            background-color: {color};
+                        "></div>
+                        <div style="font-weight: bold; font-size: 16px; text-align: left; margin-bottom: 5px;">
                             {player["player_name"]}
                         </div>
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div style="color: {status_color}; font-weight: 500;">
+                        <div style="text-align: right;">
+                            <div style="color: #3366FF; font-weight: 500; font-size: 16px;">
                                 {readiness:.1f}%
-                            </div>
-                            <div style="font-size: 12px; color: #555;">
-                                {player["recommendation"]}
                             </div>
                         </div>
                     </div>
@@ -475,16 +573,28 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
             st.markdown(
                 f"""
                 <div style="
-                    background-color: #F0F0F0;
+                    position: relative;
+                    background-color: rgba(245, 245, 224, 5);
                     padding: 8px 12px;
+                    padding-left: 16px;
                     margin-bottom: 8px;
                     border-radius: 4px;
-                    text-align: center;
+                    text-align: left;
+                    overflow: hidden;
                 ">
-                    <div style="font-weight: bold; font-size: 14px;">
+                    <div style="
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        width: 6px;
+                        height: 100%;
+                        background-color: #F4A261;
+                    "></div>
+                    <div style="font-weight: bold; font-size: 16px;">
                         {player["player_name"]}
                     </div>
-                    <div style="color: {status_color}; font-weight: 500;">
+                    <div style="text-align: right;">
+                    <div style="color: #3366FF; font-weight: 500; font-size: 16px;">
                         {readiness:.1f}%
                     </div>
                 </div>
@@ -494,7 +604,7 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
     
     # Display unavailable players (if any)
     if len(squad_recommendations["unavailable"]) > 0:
-        st.markdown("### Unavailable Players")
+        st.markdown("### Fatigued Players")
         unavailable_cols = st.columns(7)
         
         for i, player in enumerate(squad_recommendations["unavailable"]):
@@ -502,17 +612,28 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
                 st.markdown(
                     f"""
                     <div style="
-                        background-color: #FFE5E5;
-                        border-left: 4px solid {THEME["ACCENT"]};
+                        position: relative;
+                        background-color: rgba(255, 235, 235, 1);
                         padding: 8px 12px;
+                        padding-left: 16px;
                         margin-bottom: 8px;
                         border-radius: 4px;
-                        text-align: center;
+                        text-align: left;
+                        overflow: hidden;
                     ">
-                        <div style="font-weight: bold; font-size: 14px;">
+                        <div style="
+                            position: absolute;
+                            top: 0;
+                            left: 0;
+                            width: 6px;
+                            height: 100%;
+                            background-color: {THEME["ACCENT"]};
+                        "></div>
+                        <div style="font-weight: bold; font-size: 16px;">
                             {player["player_name"]}
                         </div>
-                        <div style="color: {THEME["ACCENT"]}; font-weight: 500;">
+                        <div style="text-align: right;">
+                        <div style="color: #3366FF; font-weight: 500; font-size: 16px;">
                             {player["readiness_score"]:.1f}%
                         </div>
                     </div>
@@ -520,6 +641,8 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
                     unsafe_allow_html=True
                 )
     
+
+    st.markdown("<br><br>", unsafe_allow_html=True)  # Adds two line breaks for spacing
     # Show overall team readiness chart
     st.markdown("### Team Readiness Overview")
     
@@ -600,60 +723,6 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
             <div style="text-align: center; padding: 10px; background-color: {THEME["CARD"]}; border-radius: 5px; box-shadow: 0 1px 3px rgba(0,0,0,0.12);">
                 <div style="font-size: 14px; color: {THEME["ACCENT"]};">Rest</div>
                 <div style="font-size: 24px; font-weight: bold; color: {THEME["PRIMARY"]};">{rest_count}</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    
-    # Fixture information display
-    st.markdown("### Upcoming Fixture")
-    
-    # Example fixture details (could be replaced with real data)
-    fixture_cols = st.columns([3, 2, 3])
-    
-    with fixture_cols[0]:
-        st.markdown(
-            f"""
-            <div style="text-align: right; padding: 15px;">
-                <div style="font-size: 20px; font-weight: bold; color: {THEME["PRIMARY"]};">
-                    Chelsea FC
-                </div>
-                <div style="font-size: 14px; color: {THEME["TEXT_LIGHT"]};">
-                    Home
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    
-    with fixture_cols[1]:
-        st.markdown(
-            f"""
-            <div style="text-align: center; padding: 15px;">
-                <div style="font-size: 14px; color: {THEME["TEXT_LIGHT"]};">
-                    {match_date.strftime("%d %b %Y")}
-                </div>
-                <div style="font-size: 20px; font-weight: bold; color: {THEME["PRIMARY"]};">
-                    VS
-                </div>
-                <div style="font-size: 14px; color: {THEME["TEXT_LIGHT"]};">
-                    Premier League
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    
-    with fixture_cols[2]:
-        st.markdown(
-            f"""
-            <div style="text-align: left; padding: 15px;">
-                <div style="font-size: 20px; font-weight: bold; color: {THEME["TEXT"]};">
-                    Manchester City
-                </div>
-                <div style="font-size: 14px; color: {THEME["TEXT_LIGHT"]};">
-                    Away
-                </div>
             </div>
             """,
             unsafe_allow_html=True

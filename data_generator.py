@@ -1,4 +1,4 @@
-# data_generator.py
+
 """
 Functions for generating synthetic training data for demonstration purposes.
 """
@@ -20,7 +20,7 @@ def generate_sample_data(num_players=24):
     # Create a range of dates (90 days)
     today = datetime.now()
     date_range = [today - timedelta(days=i) for i in range(90)]
-    date_range.reverse()  # Start from earliest date
+    date_range.reverse()  
     
     # Player names - Chelsea players and squad members
     player_names = [
@@ -54,9 +54,6 @@ def generate_sample_data(num_players=24):
     
     # Generate data for each player
     all_data = []
-    
-    # Categorize players for readiness status simulation
-    # We want to have more players in ready and optimal condition
     
     # 60% of players will be in optimal or ready condition (higher baseline recovery)
     ready_players = np.random.choice(players, int(len(players) * 0.6), replace=False).tolist()
@@ -146,7 +143,7 @@ def generate_sample_data(num_players=24):
                         pattern[match_day + i] = -match_impact + i * recovery_speed
         
         # Add minor fatigue periods for all players
-        num_issues = np.random.randint(1, 3) if player in ready_players else np.random.randint(2, 4)
+        num_issues = np.random.randint(1, 2) if player in ready_players else np.random.randint(2, 3)
         for _ in range(num_issues):
             # Place fatigue periods mostly in the past, not recent
             issue_start = np.random.randint(0, len(pattern) - 20)

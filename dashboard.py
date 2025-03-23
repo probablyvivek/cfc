@@ -1,4 +1,3 @@
-# dashboard.py
 """
 Main dashboard application for the CFC Recovery Insights Dashboard.
 """
@@ -13,20 +12,19 @@ from theme import THEME, apply_theme_css
 from data_processing import load_data, calculate_rolling_average, get_weekly_summary
 from data_generator import generate_sample_data
 from analysis import get_recommendations, analyze_workload_progression
-from visualization import create_plotly_chart, create_weekly_summary_chart
+from visualization import create_plotly_chart, create_weekly_summary_chart, create_enhanced_workload_visualization
 from team_readiness import render_match_readiness_dashboard, PLAYER_POSITIONS
 
-# === Page Setup ===
+
 st.set_page_config(
     page_title="CFC Recovery Insights Dashboard",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Apply CSS styling
 st.markdown(apply_theme_css(), unsafe_allow_html=True)
 
-# === Sidebar ===
+
 def setup_sidebar():
     with st.sidebar:
         st.image("https://upload.wikimedia.org/wikipedia/en/thumb/c/cc/Chelsea_FC.svg/800px-Chelsea_FC.svg.png", width=80)
@@ -44,26 +42,26 @@ def setup_sidebar():
             st.write("Upload your recovery data or use the synthetic dataset to explore")
             uploaded_file = st.file_uploader("Upload Recovery CSV", type=["csv"])
             
-            # Add a button to regenerate synthetic data
-            if st.button("Regenerate Synthetic Data"):
-                st.session_state['regenerate_data'] = True
-            else:
-                if 'regenerate_data' not in st.session_state:
-                    st.session_state['regenerate_data'] = False
+            # Initialize session state for regeneration flag
+            if 'regenerate_data' not in st.session_state:
+                st.session_state['regenerate_data'] = False
         
         # Load data first to get player list
         if 'regenerate_data' in st.session_state and st.session_state['regenerate_data']:
             df = generate_sample_data(24)  # Generate data for all 24 players
-            st.session_state['regenerate_data'] = False
+            st.session_state['regenerate_data'] = False  # Reset the flag
+            
+            # Store the generated data in session state for persistence
+            st.session_state['synthetic_data'] = df
+        elif 'synthetic_data' in st.session_state and uploaded_file is None:
+            df = st.session_state['synthetic_data']
         else:
             df = load_data(uploaded_file)
         
         if df is None:
             st.error("Failed to load data. Please check your data source.")
             st.stop()
-        
-        # Common settings regardless of view
-        # Risk threshold with more detailed slider
+
         st.markdown("### Risk Threshold")
         risk_threshold = st.slider(
             "Score below this value indicates risk", 
@@ -128,11 +126,9 @@ def setup_sidebar():
         
         # Team readiness view settings
         else:
-            # No additional settings needed for team view
-            # Pass empty values for individual player settings
             return dashboard_view, df, None, None, risk_threshold, None, None, None, None, None
 
-# === Dashboard Header ===
+
 def render_header(dashboard_view, selected_player=None):
     if dashboard_view == "Individual Player":
         st.markdown(f"""
@@ -140,7 +136,7 @@ def render_header(dashboard_view, selected_player=None):
             <h1 class="dashboard-title">CFC Recovery Insights Dashboard</h1>
             <div class="user-info">
                 <b>{datetime.now().strftime("%A, %d %B %Y")}</b><br>
-                Physiotherapist/Workload Specialist View | Viewing: <b>{selected_player}</b>
+               Recovery Specialist View | Viewing: <b>{selected_player}</b>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -150,12 +146,12 @@ def render_header(dashboard_view, selected_player=None):
             <h1 class="dashboard-title">CFC Team Readiness Dashboard</h1>
             <div class="user-info">
                 <b>{datetime.now().strftime("%A, %d %B %Y")}</b><br>
-                Physiotherapist/Workload Specialist View | <b>Match Day Preparation</b>
+               Recovery Specialist View | <b>Match Day Preparation</b>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-# === Metrics Row ===
+
 def render_metrics(filtered_df, risk_threshold):
     avg = filtered_df["emboss_baseline_score"].mean()
     recent_avg = filtered_df.tail(5)["emboss_baseline_score"].mean()
@@ -201,7 +197,6 @@ def render_metrics(filtered_df, risk_threshold):
     
     return below
 
-# === Status Box ===
 def render_status_box(filtered_df, risk_threshold):
     # Get recommendations from the analysis module
     recent_data = filtered_df.tail(7)  # Last 7 days
@@ -226,7 +221,6 @@ def render_status_box(filtered_df, risk_threshold):
     </div>
     """, unsafe_allow_html=True)
 
-# === Main Chart Area ===
 def render_chart_area(filtered_df, risk_threshold, show_rolling_avg, rolling_window, weekly_summary_data, show_weekly_summary, player_name="Unknown Player"):
     st.markdown('<div class="chart-area">', unsafe_allow_html=True)
     
@@ -265,7 +259,7 @@ def render_chart_area(filtered_df, risk_threshold, show_rolling_avg, rolling_win
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-# === Recommendations Panel ===
+
 def render_recommendations(filtered_df, risk_threshold, show_recommendations):
     if show_recommendations:
         # Get recommendations based on recent data
@@ -343,9 +337,17 @@ def render_recommendations(filtered_df, risk_threshold, show_recommendations):
         </div>
         """, unsafe_allow_html=True)
 
-# === Workload Analysis Panel ===
+
 def render_workload_analysis(df_player, filtered_df, risk_threshold):
-    # Get complete player data for acute:chronic calculation (need at least 4 weeks)
+    """
+    Render the workload analysis panel with improved visualization
+    
+    Parameters:
+    df_player (DataFrame): Complete player history data
+    filtered_df (DataFrame): Filtered data for the selected time period
+    risk_threshold (float): Threshold for considering scores as 'risk'
+    """
+
     # Current week data (last 7 days)
     current_week_data = filtered_df.tail(7)
     
@@ -368,130 +370,35 @@ def render_workload_analysis(df_player, filtered_df, risk_threshold):
     
     # Only show ACWR metrics if we have sufficient data
     if workload_analysis['status'] != 'insufficient_data':
+        acwr_value = workload_analysis.get('acwr', 0)
+        week_change = workload_analysis.get('week_change', 0)
+        
         st.markdown(f"""
         <p>
-            <b>Acute:Chronic Workload Ratio:</b> {workload_analysis.get('acwr', 0):.2f}
-            <br><b>Week-to-Week Change:</b> {workload_analysis.get('week_change', 0):.2f}
+            <b>Acute Chronic Workload Ratio:</b> {acwr_value:.2f}
+            <br><b>Week-to-Week Change:</b> {week_change:+.2f}
         </p>
         """, unsafe_allow_html=True)
         
-        # Create a simple chart showing acute vs chronic load
+        # Create enhanced visualization using our new function
         if len(df_player) >= 28:  # Only if we have enough data for 4 weeks
-            # Calculate weekly averages for recent weeks
-            recent_weeks = []
-            for i in range(4):
-                if len(df_player) >= (i+1)*7:
-                    start_idx = len(df_player) - (i+1)*7
-                    end_idx = len(df_player) - i*7 if i > 0 else len(df_player)
-                    week_data = df_player.iloc[start_idx:end_idx]
-                    week_avg = week_data['emboss_baseline_score'].mean()
-                    recent_weeks.append(week_avg)
-            
-            recent_weeks.reverse()  # Order from oldest to newest
-            
-            # Create chart
-            fig = go.Figure()
-            
-            # Add bar chart for weekly averages with better colors
-            fig.add_trace(go.Bar(
-                x=['Week -3', 'Week -2', 'Week -1', 'Current'],
-                y=recent_weeks,
-                name='Weekly Load',
-                marker_color=[THEME['SECONDARY'], THEME['SECONDARY'], 
-                              THEME['SECONDARY'], THEME['PRIMARY']],
-                marker_line_color='rgba(0,0,0,0.3)',
-                marker_line_width=1,
-                opacity=0.85
-            ))
-            
-            # Add chronic load line with better styling
-            if len(recent_weeks) == 4:
-                chronic_load = sum(recent_weeks[:3]) / 3
-                fig.add_trace(go.Scatter(
-                    x=['Week -3', 'Week -2', 'Week -1', 'Current'],
-                    y=[chronic_load, chronic_load, chronic_load, chronic_load],
-                    mode='lines',
-                    name='Chronic Load (3-week avg)',
-                    line=dict(color=THEME['TEXT'], width=2, dash='dash')
-                ))
-                
-                # Add shaded area for the safe zone (±10% of chronic load)
-                upper_safe = min(1, chronic_load + 0.1)
-                lower_safe = max(-1, chronic_load - 0.1)
-                
-                x_values = ['Week -3', 'Week -2', 'Week -1', 'Current', 
-                            'Current', 'Week -1', 'Week -2', 'Week -3']
-                y_values = [upper_safe, upper_safe, upper_safe, upper_safe,
-                            lower_safe, lower_safe, lower_safe, lower_safe]
-                
-                fig.add_trace(go.Scatter(
-                    x=x_values,
-                    y=y_values,
-                    fill='toself',
-                    fillcolor='rgba(42, 157, 143, 0.1)',
-                    line=dict(width=0),
-                    name='Safe Zone (±10%)',
-                    hoverinfo='skip'
-                ))
-            
-            # Update layout with better styling
-            fig.update_layout(
-                title={
-                    'text': "Acute vs Chronic Workload",
-                    'y': 0.95,
-                    'x': 0.5,
-                    'xanchor': 'center',
-                    'yanchor': 'top',
-                    'font': dict(size=18, color=THEME['PRIMARY'])
-                },
-                height=250,
-                margin=dict(l=20, r=20, t=40, b=30),
-                yaxis_title="EMBOSS Score Avg",
-                yaxis=dict(
-                    range=[-1, 1],  # Match the scale of EMBOSS scores
-                    showgrid=True,
-                    gridcolor='rgba(220, 220, 220, 0.8)',
-                    zeroline=True,
-                    zerolinecolor='rgba(0, 0, 0, 0.2)'
-                ),
-                xaxis=dict(
-                    showgrid=False,
-                    tickangle=-0
-                ),
-                showlegend=True,
-                legend=dict(
-                    orientation="h", 
-                    yanchor="top", 
-                    y=-0.15, 
-                    xanchor="center", 
-                    x=0.5
-                ),
-                plot_bgcolor='white',
-                hovermode='x unified'
-            )
-            
-            # Add annotation for the ACWR value
-            acwr_value = workload_analysis.get('acwr', 0)
-            acwr_color = "red" if acwr_value > 1.3 else ("orange" if acwr_value > 1.1 else "green")
-            
-            fig.add_annotation(
-                x="Current",
-                y=recent_weeks[3] + 0.05,
-                text=f"ACWR: {acwr_value:.2f}",
-                showarrow=True,
-                arrowhead=2,
-                arrowsize=1,
-                arrowwidth=2,
-                arrowcolor=acwr_color,
-                font=dict(size=12, color=acwr_color, family="Arial, sans-serif"),
-                bordercolor=acwr_color,
-                borderwidth=1,
-                borderpad=4,
-                bgcolor="white",
-                opacity=0.8
-            )
-            
+            fig = create_enhanced_workload_visualization(df_player, risk_threshold)
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Add explanation of ACWR for football context
+            st.markdown("""
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 5px solid #1A2B4C;">
+                <h4 style="margin-top: 0; color: #1A2B4C;">Understanding Acute Chronic Workload Ratio (ACWR)</h4>
+                <p>The ACWR is a key metric for monitoring training load and managing injury risk in football:</p>
+                <ul style="margin-bottom: 5px;">
+                    <li><b>Below 0.8:</b> Undertraining zone - player may lack adequate preparation for match demands or be in a detraining phase</li>
+                    <li><b>0.8-1.3:</b> Optimal loading zone - balanced workload with minimal injury risk, ideal for performance development</li>
+                    <li><b>1.3-1.5:</b> Moderate risk zone - elevated injury risk, requires careful monitoring and potentially adjusted training</li>
+                    <li><b>Above 1.5:</b> High risk zone - significantly increased injury risk, typically requires immediate load management</li>
+                </ul>
+                <p style="font-style: italic; margin-top: 10px; font-size: 13px;">Note: EMBOSS scores are used as a proxy for workload in this analysis. For optimal workload management, combine with external load metrics (GPS data) and internal load metrics (RPE, heart rate).</p>
+            </div>
+            """, unsafe_allow_html=True)
     else:
         st.markdown("<p><i>Collecting baseline data for workload analysis. At least 4 weeks of data required.</i></p>", unsafe_allow_html=True)
     
@@ -501,15 +408,15 @@ def render_workload_analysis(df_player, filtered_df, risk_threshold):
         st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
     st.markdown("</ul></div>", unsafe_allow_html=True)
 
-# === Footer ===
+
 def render_footer():
     st.markdown("""
     <div class="dashboard-footer">
-        <p>CFC Recovery Insights Dashboard | Version 2.0 | Developed by Performance Science Team</p>
+        <p>CFC Recovery Insights Dashboard | Version 1.0 | Developed by VIvek Tiwari and Nikhil Negi</p>
     </div>
     """, unsafe_allow_html=True)
 
-# === Main Function ===
+
 def main():
     # Setup sidebar and get parameters
     results = setup_sidebar()
