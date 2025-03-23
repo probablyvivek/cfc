@@ -6,12 +6,13 @@ Main dashboard application for the CFC Recovery Insights Dashboard.
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
+import plotly.graph_objects as go
 
 # Import from the refactored modules
 from theme import THEME, apply_theme_css
 from data_processing import load_data, calculate_rolling_average, get_weekly_summary
 from data_generator import generate_sample_data
-from analysis import get_recommendations
+from analysis import get_recommendations, analyze_workload_progression
 from visualization import create_plotly_chart, create_weekly_summary_chart
 
 # === Page Setup ===
@@ -89,6 +90,9 @@ def setup_sidebar():
         # Weekly summary toggle
         show_weekly_summary = st.checkbox("Show Weekly Summary", value=True)
         
+        # Workload analysis toggle
+        show_workload_analysis = st.checkbox("Show Workload Analysis", value=True)
+        
         # Helpful tooltip
         st.markdown("""
         ---
@@ -98,7 +102,7 @@ def setup_sidebar():
         - Scores below threshold require attention
         """)
         
-        return df_player, option, risk_threshold, show_rolling_avg, rolling_window, show_recommendations, show_weekly_summary
+        return df_player, option, risk_threshold, show_rolling_avg, rolling_window, show_recommendations, show_weekly_summary, show_workload_analysis
 
 # === Dashboard Header ===
 def render_header(selected_player):
@@ -158,26 +162,34 @@ def render_metrics(filtered_df, risk_threshold):
     
     return below
 
-# In dashboard.py
+# === Status Box ===
+# === Status Box ===
 def render_status_box(filtered_df, risk_threshold):
     # Get recommendations from the analysis module
     recent_data = filtered_df.tail(7)  # Last 7 days
     recommendations = get_recommendations(recent_data, risk_threshold)
     
     status_color = THEME['ACCENT'] if recommendations['status'] == 'high_risk' else (THEME['WARNING'] if recommendations['status'] == 'moderate_risk' else THEME['SUCCESS'])
-    status_text = recommendations['title']
+    
+    # Extract the emoji and the rest of the title
+    if ":" in recommendations['title']:
+        emoji_part = recommendations['title'].split(':')[0] + ":"
+        text_part = recommendations['title'].split(':', 1)[1].strip()
+    else:
+        emoji_part = ""
+        text_part = recommendations['title']
 
     st.markdown(f"""
     <div class="status-box" style="background-color:{status_color}20; border-left:5px solid {status_color}">
-        <div class="status-icon">{status_text.split(':')[0]}</div>
+        <div class="status-icon">{emoji_part}</div>
         <div>
-            <h3 style="margin:0; color:{status_color};">{status_text.split(':')[1]}</h3>
+            <h3 style="margin:0; color:{status_color};">{text_part}</h3>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
 # === Main Chart Area ===
-def render_chart_area(filtered_df, risk_threshold, show_rolling_avg, rolling_window, weekly_summary_data, show_weekly_summary):
+def render_chart_area(filtered_df, risk_threshold, show_rolling_avg, rolling_window, weekly_summary_data, show_weekly_summary, player_name="Unknown Player"):
     st.markdown('<div class="chart-area">', unsafe_allow_html=True)
     
     # Chart Tabs
@@ -189,7 +201,8 @@ def render_chart_area(filtered_df, risk_threshold, show_rolling_avg, rolling_win
             filtered_df, 
             risk_threshold, 
             show_rolling_avg,
-            rolling_window
+            rolling_window,
+            player_name
         )
         st.plotly_chart(fig, use_container_width=True)
         
@@ -229,6 +242,21 @@ def render_recommendations(filtered_df, risk_threshold, show_recommendations):
             <p><b>Analysis:</b> Based on your recent recovery scores, with 
             {recommendations['metrics']['below_threshold']} days below threshold and an average of 
             {recommendations['metrics']['recent_avg']:.2f}.</p>
+        """, unsafe_allow_html=True)
+        
+        # Add trend and variability if available in the metrics
+        if 'trend' in recommendations['metrics'] and 'variability' in recommendations['metrics']:
+            st.markdown(f"""
+            <p>
+                <b>Recovery Trend:</b> {recommendations['metrics']['trend']:.2f} 
+                ({("Improving" if recommendations['metrics']['trend'] > 0 else "Declining") if abs(recommendations['metrics']['trend']) > 0.05 else "Stable"})
+                <br>
+                <b>Recovery Stability:</b> {recommendations['metrics']['variability']:.2f}
+                ({("Unstable" if recommendations['metrics']['variability'] > 0.3 else "Moderately stable") if recommendations['metrics']['variability'] > 0.2 else "Stable"})
+            </p>
+            """, unsafe_allow_html=True)
+            
+        st.markdown(f"""
             <h4>Recommendations:</h4>
             <ul>
                 {"".join([f"<li>{rec}</li>" for rec in recommendations['recommendations']])}
@@ -277,6 +305,166 @@ def render_recommendations(filtered_df, risk_threshold, show_recommendations):
         </div>
         """, unsafe_allow_html=True)
 
+# === Workload Analysis Panel ===
+def render_workload_analysis(df_player, filtered_df, risk_threshold):
+    # Get complete player data for acute:chronic calculation (need at least 4 weeks)
+    # Current week data (last 7 days)
+    current_week_data = filtered_df.tail(7)
+    
+    # Calculate workload analysis
+    workload_analysis = analyze_workload_progression(df_player, current_week_data, risk_threshold)
+    
+    # Set color based on status
+    if workload_analysis['status'] == 'high_spike':
+        status_color = THEME['ACCENT']
+    elif workload_analysis['status'] == 'detraining_risk':
+        status_color = THEME['WARNING']
+    else:
+        status_color = THEME['SUCCESS']
+    
+    # Display the workload analysis panel
+    st.markdown(f"""
+    <div class="recommendation-panel" style="border-left-color: {status_color}">
+        <h3 style="color: {status_color}; margin-top: 0;">{workload_analysis['title']}</h3>
+    """, unsafe_allow_html=True)
+    
+    # Only show ACWR metrics if we have sufficient data
+    if workload_analysis['status'] != 'insufficient_data':
+        st.markdown(f"""
+        <p>
+            <b>Acute:Chronic Workload Ratio:</b> {workload_analysis.get('acwr', 0):.2f}
+            <br><b>Week-to-Week Change:</b> {workload_analysis.get('week_change', 0):.2f}
+        </p>
+        """, unsafe_allow_html=True)
+        
+        # Create a simple chart showing acute vs chronic load
+        if len(df_player) >= 28:  # Only if we have enough data for 4 weeks
+            # Calculate weekly averages for recent weeks
+            recent_weeks = []
+            for i in range(4):
+                if len(df_player) >= (i+1)*7:
+                    start_idx = len(df_player) - (i+1)*7
+                    end_idx = len(df_player) - i*7 if i > 0 else len(df_player)
+                    week_data = df_player.iloc[start_idx:end_idx]
+                    week_avg = week_data['emboss_baseline_score'].mean()
+                    recent_weeks.append(week_avg)
+            
+            recent_weeks.reverse()  # Order from oldest to newest
+            
+            # Create chart
+            fig = go.Figure()
+            
+            # Add bar chart for weekly averages with better colors
+            fig.add_trace(go.Bar(
+                x=['Week -3', 'Week -2', 'Week -1', 'Current'],
+                y=recent_weeks,
+                name='Weekly Load',
+                marker_color=[THEME['SECONDARY'], THEME['SECONDARY'], 
+                              THEME['SECONDARY'], THEME['PRIMARY']],
+                marker_line_color='rgba(0,0,0,0.3)',
+                marker_line_width=1,
+                opacity=0.85
+            ))
+            
+            # Add chronic load line with better styling
+            if len(recent_weeks) == 4:
+                chronic_load = sum(recent_weeks[:3]) / 3
+                fig.add_trace(go.Scatter(
+                    x=['Week -3', 'Week -2', 'Week -1', 'Current'],
+                    y=[chronic_load, chronic_load, chronic_load, chronic_load],
+                    mode='lines',
+                    name='Chronic Load (3-week avg)',
+                    line=dict(color=THEME['TEXT'], width=2, dash='dash')
+                ))
+                
+                # Add shaded area for the safe zone (±10% of chronic load)
+                upper_safe = min(1, chronic_load + 0.1)
+                lower_safe = max(-1, chronic_load - 0.1)
+                
+                x_values = ['Week -3', 'Week -2', 'Week -1', 'Current', 
+                            'Current', 'Week -1', 'Week -2', 'Week -3']
+                y_values = [upper_safe, upper_safe, upper_safe, upper_safe,
+                            lower_safe, lower_safe, lower_safe, lower_safe]
+                
+                fig.add_trace(go.Scatter(
+                    x=x_values,
+                    y=y_values,
+                    fill='toself',
+                    fillcolor='rgba(42, 157, 143, 0.1)',
+                    line=dict(width=0),
+                    name='Safe Zone (±10%)',
+                    hoverinfo='skip'
+                ))
+            
+            # Update layout with better styling
+            fig.update_layout(
+                title={
+                    'text': "Acute vs Chronic Workload",
+                    'y': 0.95,
+                    'x': 0.5,
+                    'xanchor': 'center',
+                    'yanchor': 'top',
+                    'font': dict(size=18, color=THEME['PRIMARY'])
+                },
+                height=250,
+                width = 200,
+                autosize = False,
+                margin=dict(l=20, r=20, t=40, b=30),
+                yaxis_title="EMBOSS Score Avg",
+                yaxis=dict(
+                    range=[-1, 1],  # Match the scale of EMBOSS scores
+                    showgrid=True,
+                    gridcolor='rgba(220, 220, 220, 0.8)',
+                    zeroline=True,
+                    zerolinecolor='rgba(0, 0, 0, 0.2)'
+                ),
+                xaxis=dict(
+                    showgrid=False,
+                    tickangle=-0
+                ),
+                showlegend=True,
+                legend=dict(
+                    orientation="h", 
+                    yanchor="top", 
+                    y=-0.15, 
+                    xanchor="center", 
+                    x=0.5
+                ),
+                plot_bgcolor='white',
+                hovermode='x unified'
+            )
+            
+            # Add annotation for the ACWR value
+            acwr_value = workload_analysis.get('acwr', 0)
+            acwr_color = "red" if acwr_value > 1.3 else ("orange" if acwr_value > 1.1 else "green")
+            
+            fig.add_annotation(
+                x="Current",
+                y=recent_weeks[3] + 0.05,
+                text=f"ACWR: {acwr_value:.2f}",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=2,
+                arrowcolor=acwr_color,
+                font=dict(size=12, color=acwr_color, family="Arial, sans-serif"),
+                bordercolor=acwr_color,
+                borderwidth=1,
+                borderpad=4,
+                bgcolor="white",
+                opacity=0.8
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.markdown("<p><i>Collecting baseline data for workload analysis. At least 4 weeks of data required.</i></p>", unsafe_allow_html=True)
+    
+    # Show recommendations
+    st.markdown("<h4>Workload Recommendations:</h4><ul>", unsafe_allow_html=True)
+    for rec in workload_analysis['recommendations']:
+        st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
+    st.markdown("</ul></div>", unsafe_allow_html=True)
+
 # === Footer ===
 def render_footer():
     st.markdown("""
@@ -288,7 +476,7 @@ def render_footer():
 # === Main Function ===
 def main():
     # Setup sidebar and get parameters
-    df_player, option, risk_threshold, show_rolling_avg, rolling_window, show_recommendations, show_weekly_summary = setup_sidebar()
+    df_player, option, risk_threshold, show_rolling_avg, rolling_window, show_recommendations, show_weekly_summary, show_workload_analysis = setup_sidebar()
     
     # Filter data based on selected time period
     end_date = df_player["date"].max()
@@ -308,8 +496,11 @@ def main():
     # Calculate weekly summary data
     weekly_summary_data = get_weekly_summary(filtered_df, risk_threshold)
     
+    # Get player name for display
+    player_name = df_player["player_name"].iloc[0] if len(df_player) > 0 else "Unknown Player"
+    
     # Render header
-    render_header(df_player["player_name"].iloc[0] if len(df_player) > 0 else "Unknown Player")
+    render_header(player_name)
     
     # Render metrics
     below = render_metrics(filtered_df, risk_threshold)
@@ -322,12 +513,24 @@ def main():
     
     with left_col:
         # Render chart area
-        render_chart_area(filtered_df, risk_threshold, show_rolling_avg, rolling_window, weekly_summary_data, show_weekly_summary)
+        render_chart_area(filtered_df, risk_threshold, show_rolling_avg, rolling_window, 
+                        weekly_summary_data, show_weekly_summary, player_name)
     
     with right_col:
-        # Render recommendations panel
-        render_recommendations(filtered_df, risk_threshold, show_recommendations)
+    # Instead of tabs, show both sections vertically
+        if show_recommendations:
+            render_recommendations(filtered_df, risk_threshold, show_recommendations)
+        else:
+            st.info("Recovery recommendations are disabled")
+        
+    # Add some spacing
+    st.markdown("<br>", unsafe_allow_html=True)
     
+    if show_workload_analysis:
+        render_workload_analysis(df_player, filtered_df, risk_threshold)
+    else:
+        st.info("Workload analysis is disabled")
+          
     # Render footer
     render_footer()
 

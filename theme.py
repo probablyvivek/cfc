@@ -38,6 +38,23 @@ def apply_theme_css():
             text-align: center;
             transition: transform 0.3s ease, box-shadow 0.3s ease;
         }}
+        .workload-panel {{
+            background-color: {THEME['CARD']};
+            border-left: 5px solid {THEME['PRIMARY']};
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }}
+        .metric-pill {{
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 30px;
+            margin-right: 8px;
+            margin-bottom: 8px;
+            font-weight: 500;
+            font-size: 14px;
+        }}
         .metric-card:hover {{
             transform: translateY(-5px);
             box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);

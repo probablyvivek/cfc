@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from theme import THEME
 
-def create_plotly_chart(df, risk_threshold, show_rolling_avg=True, window=7):
+def create_plotly_chart(df, risk_threshold, show_rolling_avg=True, window=7, player_name="Unknown Player"):
     """
     Create an interactive Plotly chart for recovery data
     
@@ -18,6 +18,7 @@ def create_plotly_chart(df, risk_threshold, show_rolling_avg=True, window=7):
     risk_threshold (float): Threshold for considering scores as 'risk'
     show_rolling_avg (bool): Whether to show rolling average line
     window (int): Window size for rolling average
+    player_name (str): Name of the player for chart title
     
     Returns:
     Figure: Plotly figure object
@@ -37,9 +38,9 @@ def create_plotly_chart(df, risk_threshold, show_rolling_avg=True, window=7):
         )
         fig.update_layout(
             title={
-                'text': 'EMBOSS Recovery Score Trend Analysis',
-                'y':0.95,
-                'x':0.5,
+                'text': f'EMBOSS Recovery Score Trend Analysis of {player_name}',
+                'y': 0.95,
+                'x': 0.5,
                 'xanchor': 'center',
                 'yanchor': 'top',
                 'font': dict(size=24, color=THEME['PRIMARY'], family='Arial, sans-serif')
@@ -144,9 +145,9 @@ def create_plotly_chart(df, risk_threshold, show_rolling_avg=True, window=7):
     # Update layout
     fig.update_layout(
         title={
-            'text': 'EMBOSS Recovery Score Trend Analysis',
-            'y':0.95,
-            'x':0.5,
+            'text': f'EMBOSS Recovery Score Trend Analysis of {player_name}',
+            'y': 0.95,
+            'x': 0.5,
             'xanchor': 'center',
             'yanchor': 'top',
             'font': dict(size=24, color=THEME['PRIMARY'], family='Arial, sans-serif')
