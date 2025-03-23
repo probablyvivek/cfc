@@ -594,7 +594,7 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
                         {player["player_name"]}
                     </div>
                     <div style="text-align: right;">
-                    <div style="color: #3366FF; font-weight: 500; font-size: 16px;">
+                    <div style="color: #F4A261; font-weight: 500; font-size: 16px;">
                         {readiness:.1f}%
                     </div>
                 </div>
@@ -633,7 +633,7 @@ def render_match_readiness_dashboard(all_player_data, risk_threshold):
                             {player["player_name"]}
                         </div>
                         <div style="text-align: right;">
-                        <div style="color: #3366FF; font-weight: 500; font-size: 16px;">
+                        <div style="color: #E63A46; font-weight: 500; font-size: 16px;">
                             {player["readiness_score"]:.1f}%
                         </div>
                     </div>
