@@ -1,496 +1,406 @@
+# dashboard.py
 """
-Main dashboard application for the CFC Recovery Insights Dashboard.
+Main Streamlit application for the CFC Recovery Insights Dashboard.
+Provides two views: Individual Player Analysis and Team Match Readiness.
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np # Import numpy
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+from collections import namedtuple # For sidebar settings return
 
-# Import from modules
-from theme import THEME, apply_theme_css
+# Import from local modules
+from theme import THEME, apply_theme_css, STATUS_COLORS
 from data_processing import load_data, calculate_rolling_average, get_weekly_summary
 from data_generator import generate_sample_data
-from analysis import get_recommendations, analyze_workload_progression
-from visualization import create_plotly_chart, create_weekly_summary_chart, create_enhanced_workload_visualization
-from team_readiness import render_match_readiness_dashboard, PLAYER_POSITIONS
+from analysis import get_recommendations
+from visualization import create_plotly_chart, create_weekly_summary_chart
+from team_readiness import render_match_readiness_dashboard
 
-
+# Page Configuration
 st.set_page_config(
-    page_title="CFC Recovery Insights Dashboard",
+    page_title="CFC Recovery Insights",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': "# CFC Recovery Insights Dashboard" # Updated version
+    }
 )
 
+# Apply Custom CSS Theme
 st.markdown(apply_theme_css(), unsafe_allow_html=True)
 
+# Define a structure for sidebar settings for cleaner return value
+SidebarSettings = namedtuple("SidebarSettings", [
+    "dashboard_view", "data_source", "risk_threshold", "selected_player",
+    "time_period_option", "show_rolling_avg", "rolling_window",
+    "show_recommendations", "show_weekly_summary",
+    "uploaded_file" # Add uploaded_file to the named tuple
+])
 
-def setup_sidebar():
+# --- Sidebar Function ---
+# Pass df_full for player list, but handle data loading based on uploader inside main
+def setup_sidebar(df_for_player_list):
+    """Configure the sidebar options and return user settings."""
     with st.sidebar:
-        st.image("https://upload.wikimedia.org/wikipedia/en/thumb/c/cc/Chelsea_FC.svg/800px-Chelsea_FC.svg.png", width=80)
-        st.markdown("## Dashboard Settings")
-        
-        # Dashboard view selection (new)
-        dashboard_view = st.radio(
-            "Select Dashboard View",
-            options=["Individual Player", "Team Readiness"],
-            index=0
-        )
-        
-        # Data source section
-        with st.expander("Data Source", expanded=False):
-            st.write("Upload your recovery data or use the synthetic dataset to explore")
-            uploaded_file = st.file_uploader("Upload Recovery CSV", type=["csv"])
-            
-            # Initialize session state for regeneration flag
-            if 'regenerate_data' not in st.session_state:
-                st.session_state['regenerate_data'] = False
-        
-        # Load data first to get player list
-        if 'regenerate_data' in st.session_state and st.session_state['regenerate_data']:
-            df = generate_sample_data(24)  # Generate data for all 24 players
-            st.session_state['regenerate_data'] = False  # Reset the flag
-            
-            # Store the generated data in session state for persistence
-            st.session_state['synthetic_data'] = df
-        elif 'synthetic_data' in st.session_state and uploaded_file is None:
-            df = st.session_state['synthetic_data']
-        else:
-            df = load_data(uploaded_file)
-        
-        if df is None:
-            st.error("Failed to load data. Please check your data source.")
-            st.stop()
+        # 1. Logo
+        st.image("https://upload.wikimedia.org/wikipedia/en/thumb/c/cc/Chelsea_FC.svg/800px-Chelsea_FC.svg.png", width=200)
 
-        st.markdown("### Risk Threshold")
-        risk_threshold = st.slider(
-            "Score below this value indicates risk", 
-            min_value=-1.0, 
-            max_value=0.0, 
-            value=-0.4, 
-            step=0.05,
-            format="%.2f"
+        # 2. File Uploader --- MOVED HERE ---
+        uploaded_file = st.file_uploader(
+            "Upload Recovery CSV (Optional)",
+            type=["csv"],
+            help="Upload your own data (CSV format). Uses default/synthetic data if none provided."
         )
-        
-        # Individual player view settings
+        st.markdown("---") # Separator after uploader
+
+        # 3. Dashboard Controls Title
+        st.markdown("## Dashboard Controls")
+
+        # 4. Dashboard View Selection
+        dashboard_view = st.radio(
+            "Select View",
+            options=["Individual Player", "Team Readiness"],
+            index=0,
+            horizontal=True,
+            help="Choose between detailed analysis for one player or team overview for match readiness."
+        )
+        st.markdown("---")
+
+        # 5. Risk Threshold
+        risk_threshold = st.slider(
+            "Recovery Risk Threshold",
+            min_value=-0.8, max_value=0.2, value=-0.4, step=0.05,
+            format="%.2f",
+            help="Scores below this value are flagged as potential risk. Adjust based on team context."
+        )
+        st.markdown("---")
+
+        # --- View Specific Settings ---
         if dashboard_view == "Individual Player":
-            # Player selection filter
-            st.markdown("### Player Selection")
-            all_players = sorted(df["player_name"].unique())
-            
-            # Default to a key player
-            default_player_idx = all_players.index("Cole Palmer") if "Cole Palmer" in all_players else 0
-            
+            st.markdown("### Individual Player Settings")
+
+            # Player Selection - Use the passed DataFrame for the list
+            player_list = ["Select Player..."]
+            if df_for_player_list is not None and not df_for_player_list.empty:
+                 if 'player_name' in df_for_player_list.columns:
+                    try:
+                        player_list.extend(sorted(df_for_player_list["player_name"].unique()))
+                    except Exception as e:
+                        st.warning(f"Could not get player list: {e}")
+                 else:
+                     st.warning("Dataset missing 'player_name' column.")
+
+            default_player_name = "Cole Palmer"
+            default_player_index = player_list.index(default_player_name) if default_player_name in player_list else 0
+            if len(player_list) > 1 and default_player_index == 0:
+                default_player_index = 1
+
             selected_player = st.selectbox(
-                "Select Player",
-                all_players,
-                index=default_player_idx
+                "Select Player", player_list,
+                index=default_player_index,
+                 help="Choose the player to analyze."
             )
-            
-            # Filter data for selected player
-            df_player = df[df["player_name"] == selected_player]
-            
-            # Time period filter
-            st.markdown("### Time Period")
-            option = st.selectbox(
-                "Time period filter", 
-                ["Last 7 days", "Last 14 days", "Last 30 days", "Last 90 days", "All"],
-                index=2,
-                label_visibility="collapsed"
+
+            time_period_option = st.selectbox(
+                "Select Time Period",
+                ["Last 7 days", "Last 14 days", "Last 30 days", "Last 90 days", "All Time"],
+                index=2, help="Filter the data shown in charts and metrics for the selected player."
             )
-            
-            # Chart options
-            st.markdown("### Chart Options")
-            show_rolling_avg = st.checkbox("Show Rolling Average", value=True)
-            rolling_window = st.slider("Rolling Window (days)", 3, 14, 7) if show_rolling_avg else 7
-            
-            # Recommendations panel toggle
-            show_recommendations = st.checkbox("Show Recommendations", value=True)
-            
-            # Weekly summary toggle
-            show_weekly_summary = st.checkbox("Show Weekly Summary", value=True)
-            
-            # Workload analysis toggle
-            show_workload_analysis = st.checkbox("Show Workload Analysis", value=True)
-            
-            # Helpful tooltip
+
+            with st.expander("Display Options", expanded=False):
+                show_rolling_avg = st.checkbox("Show Rolling Average", value=True)
+                rolling_window = st.slider("Rolling Window (days)", 3, 14, 7, disabled=not show_rolling_avg)
+                st.markdown("---")
+                show_weekly_summary = st.checkbox("Show Weekly Summary Tab", value=True)
+                show_recommendations = st.checkbox("Show Recovery Recommendations", value=True)
+
             st.markdown("""
             ---
-            **Tip:** The EMBOSS score ranges from -1 to 1, where:
+           Tip: The EMBOSS score ranges from -1 to 1, where:\n
             - Scores above 0 indicate good recovery
             - Scores below 0 indicate fatigue
             - Scores below threshold require attention
             """)
-            
-            return dashboard_view, df, df_player, option, risk_threshold, show_rolling_avg, rolling_window, show_recommendations, show_weekly_summary, show_workload_analysis
-        
-        # Team readiness view settings
-        else:
-            return dashboard_view, df, None, None, risk_threshold, None, None, None, None, None
+
+            return SidebarSettings(
+                dashboard_view=dashboard_view, data_source=None, # data_source will be loaded in main
+                risk_threshold=risk_threshold,
+                selected_player=selected_player if selected_player != "Select Player..." else None,
+                time_period_option=time_period_option, show_rolling_avg=show_rolling_avg,
+                rolling_window=rolling_window, show_recommendations=show_recommendations,
+                show_weekly_summary=show_weekly_summary,
+                uploaded_file=uploaded_file # Return the file object
+            )
+
+        else: # Team Readiness
+            return SidebarSettings(
+                dashboard_view=dashboard_view, data_source=None, risk_threshold=risk_threshold,
+                selected_player=None, time_period_option=None, show_rolling_avg=None,
+                rolling_window=None, show_recommendations=None, show_weekly_summary=None,
+                uploaded_file=uploaded_file # Also return file object here
+            )
 
 
-def render_header(dashboard_view, selected_player=None):
-    if dashboard_view == "Individual Player":
-        st.markdown(f"""
-        <div class="dashboard-header">
-            <h1 class="dashboard-title">CFC Recovery Insights Dashboard</h1>
-            <div class="user-info">
-                <b>{datetime.now().strftime("%A, %d %B %Y")}</b><br>
-               Recovery Specialist View | Viewing: <b>{selected_player}</b>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+# --- Data Loading Section ---
+@st.cache_data(ttl=600)
+def get_data(uploaded_file_obj):
+    """Loads data based on the uploaded file object, using cache."""
+    # Pass the file object directly to load_data
+    df = load_data(uploaded_file_obj)
+    return df
+
+
+# --- UI Rendering Functions ---
+def render_header(view, player=None):
+    """Renders the main dashboard header."""
+    if view == "Individual Player":
+        title = "Player Recovery Analysis"
+        subtitle = f"Viewing: <b>{player}</b>" if player else "No Player Selected"
     else:
-        st.markdown(f"""
-        <div class="dashboard-header">
-            <h1 class="dashboard-title">CFC Team Readiness Dashboard</h1>
-            <div class="user-info">
-                <b>{datetime.now().strftime("%A, %d %B %Y")}</b><br>
-               Recovery Specialist View | <b>Match Day Preparation</b>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def render_metrics(filtered_df, risk_threshold):
-    avg = filtered_df["emboss_baseline_score"].mean()
-    recent_avg = filtered_df.tail(5)["emboss_baseline_score"].mean()
-    below = (filtered_df["emboss_baseline_score"] < risk_threshold).sum()
-    percent = (below / len(filtered_df)) * 100 if len(filtered_df) > 0 else 0
-    trend = recent_avg - avg
-    trend_icon = "↗️" if trend > 0 else "↘️" if trend < 0 else "→"
-
-    # Display metrics in enhanced cards
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Average Score</div>
-            <div class="metric-value">{avg:.2f}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col2:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Recent Avg (5 days)</div>
-            <div class="metric-value">{recent_avg:.2f} {trend_icon}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col3:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Days Below Threshold</div>
-            <div class="metric-value">{below}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col4:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Risk Percentage</div>
-            <div class="metric-value">{percent:.1f}%</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    return below
-
-def render_status_box(filtered_df, risk_threshold):
-    # Get recommendations from the analysis module
-    recent_data = filtered_df.tail(7)  # Last 7 days
-    recommendations = get_recommendations(recent_data, risk_threshold)
-    
-    status_color = THEME['ACCENT'] if recommendations['status'] == 'high_risk' else (THEME['WARNING'] if recommendations['status'] == 'moderate_risk' else THEME['SUCCESS'])
-    
-    # Extract the emoji and the rest of the title
-    if ":" in recommendations['title']:
-        emoji_part = recommendations['title'].split(':')[0] + ":"
-        text_part = recommendations['title'].split(':', 1)[1].strip()
-    else:
-        emoji_part = ""
-        text_part = recommendations['title']
-
+        title = "Team Match Readiness"
+        subtitle = "Squad Planning Overview"
     st.markdown(f"""
-    <div class="status-box" style="background-color:{status_color}20; border-left:5px solid {status_color}">
-        <div class="status-icon">{emoji_part}</div>
-        <div>
-            <h3 style="margin:0; color:{status_color};">{text_part}</h3>
+    <div class="dashboard-header">
+        <h1 class="dashboard-title">{title}</h1>
+        <div class="user-info">
+            <b>{datetime.now().strftime("%A, %d %B %Y")}</b><br>
+            {subtitle}
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-def render_chart_area(filtered_df, risk_threshold, show_rolling_avg, rolling_window, weekly_summary_data, show_weekly_summary, player_name="Unknown Player"):
-    st.markdown('<div class="chart-area">', unsafe_allow_html=True)
-    
-    # Chart Tabs
-    chart_tab, weekly_tab = st.tabs(["Recovery Trend", "Weekly Summary"])
-    
-    with chart_tab:
-        # Create and display the plotly chart
-        fig = create_plotly_chart(
-            filtered_df, 
-            risk_threshold, 
-            show_rolling_avg,
-            rolling_window,
-            player_name
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Chart description
-        st.markdown("""
-        This chart shows daily EMBOSS recovery scores over time. Points below the risk threshold are highlighted in red. 
-        The rolling average (blue line) helps identify overall trends in recovery status.
-        """)
-    
-    with weekly_tab:
-        if show_weekly_summary and len(weekly_summary_data) > 0:
-            weekly_chart = create_weekly_summary_chart(weekly_summary_data)
-            st.plotly_chart(weekly_chart, use_container_width=True)
-            
-            st.markdown("""
-            The weekly summary provides an overview of recovery patterns by week. 
-            Bars show the average score with error bars indicating min/max range. 
-            The red line tracks the number of risk days per week.
-            """)
-        else:
-            st.info("Weekly summary view is disabled or insufficient data for weekly view.")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-def render_recommendations(filtered_df, risk_threshold, show_recommendations):
-    if show_recommendations:
-        # Get recommendations based on recent data
-        recent_data = filtered_df.tail(7)  # Last 7 days
-        recommendations = get_recommendations(recent_data, risk_threshold)
-        status_color = THEME['ACCENT'] if recommendations['status'] == 'high_risk' else (THEME['WARNING'] if recommendations['status'] == 'moderate_risk' else THEME['SUCCESS'])
-        
-        # Display recommendations panel
-        st.markdown(f"""
-        <div class="recommendation-panel" style="border-left-color: {status_color}">
-            <h3 style="color: {status_color}; margin-top: 0;">{recommendations['title']}</h3>
-            <p><b>Analysis:</b> Based on recent recovery scores, with 
-            {recommendations['metrics']['below_threshold']} days below threshold and an average of 
-            {recommendations['metrics']['recent_avg']:.2f}.</p>
-        """, unsafe_allow_html=True)
-        
-        # Add trend and variability if available in the metrics
-        if 'trend' in recommendations['metrics'] and 'variability' in recommendations['metrics']:
-            st.markdown(f"""
-            <p>
-                <b>Recovery Trend:</b> {recommendations['metrics']['trend']:.2f} 
-                ({("Improving" if recommendations['metrics']['trend'] > 0 else "Declining") if abs(recommendations['metrics']['trend']) > 0.05 else "Stable"})
-                <br>
-                <b>Recovery Stability:</b> {recommendations['metrics']['variability']:.2f}
-                ({("Unstable" if recommendations['metrics']['variability'] > 0.3 else "Moderately stable") if recommendations['metrics']['variability'] > 0.2 else "Stable"})
-            </p>
-            """, unsafe_allow_html=True)
-            
-        st.markdown(f"""
-            <h4>Recommendations:</h4>
-            <ul>
-                {"".join([f"<li>{rec}</li>" for rec in recommendations['recommendations']])}
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Add a data insights section
-        st.markdown("""
-        <div class="recommendation-panel" style="border-left-color: #A3CEF1; margin-top: 20px;">
-            <h3 style="color: #1A2B4C; margin-top: 0;">Data Insights</h3>
-            <ul>
-        """, unsafe_allow_html=True)
-        
-        # Calculate some insights
-        insights = []
-        
-        # Insight 1: Best/worst days
-        if len(filtered_df) >= 7:
-            best_day = filtered_df.loc[filtered_df['emboss_baseline_score'].idxmax()]
-            worst_day = filtered_df.loc[filtered_df['emboss_baseline_score'].idxmin()]
-            insights.append(f"Best recovery day was {best_day['date'].strftime('%A, %d %b')} with a score of {best_day['emboss_baseline_score']:.2f}")
-            insights.append(f"Worst recovery day was {worst_day['date'].strftime('%A, %d %b')} with a score of {worst_day['emboss_baseline_score']:.2f}")
-        
-        # Insight 2: Recovery pattern
-        avg = filtered_df["emboss_baseline_score"].mean()
-        recent_avg = filtered_df.tail(5)["emboss_baseline_score"].mean()
-        trend = recent_avg - avg
-        if trend > 0.1:
-            insights.append(f"Recovery trend is <b style='color:{THEME['SUCCESS']}'>improving</b> with a {trend:.2f} increase in recent average")
-        elif trend < -0.1:
-            insights.append(f"Recovery trend is <b style='color:{THEME['ACCENT']}'>declining</b> with a {abs(trend):.2f} decrease in recent average")
-        else:
-            insights.append(f"Recovery trend is <b>stable</b> with minimal changes in recent average")
-        
-        # Insight 3: Recovery consistency
-        std_dev = filtered_df['emboss_baseline_score'].std()
-        if std_dev < 0.2:
-            insights.append(f"Recovery scores show high consistency (std dev: {std_dev:.2f})")
-        elif std_dev > 0.4:
-            insights.append(f"Recovery scores show high variability (std dev: {std_dev:.2f}), indicating potential recovery issues")
-        
-        # Display insights
-        st.markdown("".join([f"<li>{insight}</li>" for insight in insights]) + """
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def render_workload_analysis(df_player, filtered_df, risk_threshold):
-    """
-    Render the workload analysis panel with improved visualization
-    
-    Parameters:
-    df_player (DataFrame): Complete player history data
-    filtered_df (DataFrame): Filtered data for the selected time period
-    risk_threshold (float): Threshold for considering scores as 'risk'
-    """
-
-    # Current week data (last 7 days)
-    current_week_data = filtered_df.tail(7)
-    
-    # Calculate workload analysis
-    workload_analysis = analyze_workload_progression(df_player, current_week_data, risk_threshold)
-    
-    # Set color based on status
-    if workload_analysis['status'] == 'high_spike':
-        status_color = THEME['ACCENT']
-    elif workload_analysis['status'] == 'detraining_risk':
-        status_color = THEME['WARNING']
+def render_metrics(df_filtered, risk_thresh):
+    """Renders the key metric cards."""
+    if df_filtered.empty:
+        avg_score = np.nan; recent_avg = np.nan; days_below_threshold = 0
+        risk_percent = 0; recent_days_count = 0; trend_icon = ""
     else:
-        status_color = THEME['SUCCESS']
-    
-    # Display the workload analysis panel
-    st.markdown(f"""
-    <div class="recommendation-panel" style="border-left-color: {status_color}">
-        <h3 style="color: {status_color}; margin-top: 0;">{workload_analysis['title']}</h3>
-    """, unsafe_allow_html=True)
-    
-    # Only show ACWR metrics if we have sufficient data
-    if workload_analysis['status'] != 'insufficient_data':
-        acwr_value = workload_analysis.get('acwr', 0)
-        week_change = workload_analysis.get('week_change', 0)
-        
-        st.markdown(f"""
-        <p>
-            <b>Acute Chronic Workload Ratio:</b> {acwr_value:.2f}
-            <br><b>Week-to-Week Change:</b> {week_change:+.2f}
-        </p>
-        """, unsafe_allow_html=True)
-        
-        # Create enhanced visualization using our new function
-        if len(df_player) >= 28:  # Only if we have enough data for 4 weeks
-            fig = create_enhanced_workload_visualization(df_player, risk_threshold)
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Add explanation of ACWR for football context
-            st.markdown("""
-            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 5px solid #1A2B4C;">
-                <h4 style="margin-top: 0; color: #1A2B4C;">Understanding Acute Chronic Workload Ratio (ACWR)</h4>
-                <p>The ACWR is a key metric for monitoring training load and managing injury risk in football:</p>
-                <ul style="margin-bottom: 5px;">
-                    <li><b>Below 0.8:</b> Undertraining zone - player may lack adequate preparation for match demands or be in a detraining phase</li>
-                    <li><b>0.8-1.3:</b> Optimal loading zone - balanced workload with minimal injury risk, ideal for performance development</li>
-                    <li><b>1.3-1.5:</b> Moderate risk zone - elevated injury risk, requires careful monitoring and potentially adjusted training</li>
-                    <li><b>Above 1.5:</b> High risk zone - significantly increased injury risk, typically requires immediate load management</li>
-                </ul>
-                <p style="font-style: italic; margin-top: 10px; font-size: 13px;">Note: EMBOSS scores are used as a proxy for workload in this analysis. For optimal workload management, combine with external load metrics (GPS data) and internal load metrics (RPE, heart rate).</p>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.markdown("<p><i>Collecting baseline data for workload analysis. At least 4 weeks of data required.</i></p>", unsafe_allow_html=True)
-    
-    # Show recommendations
-    st.markdown("<h4>Workload Recommendations:</h4><ul>", unsafe_allow_html=True)
-    for rec in workload_analysis['recommendations']:
-        st.markdown(f"<li>{rec}</li>", unsafe_allow_html=True)
-    st.markdown("</ul></div>", unsafe_allow_html=True)
+        avg_score = df_filtered["emboss_baseline_score"].mean()
+        recent_days_count = min(5, len(df_filtered))
+        recent_avg = df_filtered.tail(recent_days_count)["emboss_baseline_score"].mean() if recent_days_count > 0 else np.nan
+        days_below_threshold = (df_filtered["emboss_baseline_score"] < risk_thresh).sum()
+        total_days = len(df_filtered)
+        risk_percent = (days_below_threshold / total_days) * 100 if total_days > 0 else 0
+        trend_val = np.nan
+        if not np.isnan(recent_avg) and not np.isnan(avg_score): trend_val = recent_avg - avg_score
+        trend_icon = ""
+        if not np.isnan(trend_val):
+            if trend_val > 0.05: trend_icon = "▲"
+            elif trend_val < -0.05: trend_icon = "▼"
+            else: trend_icon = "▬"
+    avg_score_str = f"{avg_score:.2f}" if pd.notna(avg_score) else "N/A"
+    recent_avg_str = f"{recent_avg:.2f}" if pd.notna(recent_avg) else "N/A"
+    days_below_threshold_str = f"{days_below_threshold}"
+    risk_percent_str = f"{risk_percent:.1f}%"
+    col1, col2, col3, col4 = st.columns(4, gap="medium")
+    with col1: st.markdown(f'<div class="metric-card"><div class="metric-label">Avg Score (Period)</div><div class="metric-value">{avg_score_str}</div></div>', unsafe_allow_html=True)
+    with col2: st.markdown(f'<div class="metric-card"><div class="metric-label">Recent Avg ({recent_days_count}d)</div><div class="metric-value">{recent_avg_str} <span>{trend_icon}</span></div></div>', unsafe_allow_html=True)
+    with col3: st.markdown(f'<div class="metric-card"><div class="metric-label">Days Below Threshold</div><div class="metric-value">{days_below_threshold_str}</div></div>', unsafe_allow_html=True)
+    with col4: st.markdown(f'<div class="metric-card"><div class="metric-label">Risk Percentage</div><div class="metric-value">{risk_percent_str}</div></div>', unsafe_allow_html=True)
+    st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True)
+    return days_below_threshold
 
+def render_status_box(df_filtered, risk_thresh):
+    """Displays the overall status summary box."""
+    recent_data = df_filtered.sort_values('date').tail(7)
+    recommendations_info = get_recommendations(recent_data, risk_thresh)
+    status = recommendations_info['status']; title = recommendations_info['title']
+    status_class = status; emoji, text = title.split(" ", 1) if " " in title else ("", title)
+    st.markdown(f'<div class="status-box {status_class}"><div class="status-icon">{emoji}</div><div><h3>{text}</h3><small>Based on the last {min(7, len(recent_data))} days.</small></div></div>', unsafe_allow_html=True)
+
+def render_chart_area(df_filtered, risk_thresh, show_roll_avg, roll_window, weekly_summary_df, show_weekly_tab, player):
+    """Renders the main chart area."""
+    st.markdown("<div class='content-block chart-area'>", unsafe_allow_html=True)
+    tabs_to_show = ["Recovery Trend"]
+    if show_weekly_tab and weekly_summary_df is not None and not weekly_summary_df.empty: tabs_to_show.append("Weekly Summary")
+    if not tabs_to_show:
+         st.info("No chart data to display."); st.markdown("</div>", unsafe_allow_html=True); return
+    chart_tabs = st.tabs(tabs_to_show)
+    with chart_tabs[0]:
+        fig_trend = create_plotly_chart(df_filtered, risk_thresh, show_roll_avg, roll_window, player)
+        st.plotly_chart(fig_trend, use_container_width=True, config={'displayModeBar': False})
+    if len(chart_tabs) > 1:
+        with chart_tabs[1]:
+            if weekly_summary_df is not None and not weekly_summary_df.empty:
+                fig_weekly = create_weekly_summary_chart(weekly_summary_df)
+                st.plotly_chart(fig_weekly, use_container_width=True, config={'displayModeBar': False})
+            else: st.info("Weekly summary data not available.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def calculate_data_insights(df_filtered):
+    """Calculates additional insights."""
+    insights = []; n = len(df_filtered)
+    if n < 3: return insights
+    try:
+        scores = pd.to_numeric(df_filtered['emboss_baseline_score'], errors='coerce')
+        valid_scores = scores.dropna(); n_valid = len(valid_scores)
+        if n_valid < 3: return insights
+        df_valid = df_filtered.loc[valid_scores.index]
+        if n_valid >= 3:
+            best_day_idx = valid_scores.idxmax(); worst_day_idx = valid_scores.idxmin()
+            best_day = df_valid.loc[best_day_idx]; worst_day = df_valid.loc[worst_day_idx]
+            insights.append(f"Best day: {best_day['date'].strftime('%a, %d %b')} ({best_day['emboss_baseline_score']:.2f})")
+            insights.append(f"Worst day: {worst_day['date'].strftime('%a, %d %b')} ({worst_day['emboss_baseline_score']:.2f})")
+        if n_valid >= 3:
+            recent_scores = df_valid.tail(min(5, n_valid))['emboss_baseline_score']
+            recent_avg = recent_scores.mean(); overall_avg = valid_scores.mean()
+            trend_diff = recent_avg - overall_avg
+            if not np.isnan(trend_diff):
+                if trend_diff > 0.07: trend_desc = f"<span style='color:{THEME['SUCCESS']}'>Improving</span>"
+                elif trend_diff < -0.07: trend_desc = f"<span style='color:{THEME['ACCENT']}'>Declining</span>"
+                else: trend_desc = "Stable"
+                insights.append(f"Recent trend: {trend_desc} (Last {len(recent_scores)}d vs Period Avg: {trend_diff:+.2f})")
+            else: insights.append("Recent trend: Not available")
+        else: insights.append("Recent trend: Insufficient data")
+        std_dev = valid_scores.std()
+        if pd.notna(std_dev) and n_valid > 1:
+            if std_dev < 0.15: consistency = "Very Consistent"
+            elif std_dev < 0.25: consistency = "Consistent"
+            elif std_dev < 0.35: consistency = "Variable"
+            else: consistency = "Highly Variable"
+            insights.append(f"Consistency: {consistency} (Std Dev: {std_dev:.2f})")
+        else: insights.append("Consistency: Insufficient data")
+    except Exception as e: st.error(f"Error calculating insights: {e}"); insights.append("Could not calculate some insights.")
+    return insights
+
+def render_recommendations_panel(df_filtered, risk_thresh):
+    """Renders the recommendations and insights panel."""
+    st.markdown("<div class='content-block info-panel'>", unsafe_allow_html=True)
+    st.markdown("<h4 class='info-panel-title'>Analysis & Recommendations</h4>", unsafe_allow_html=True)
+    st.markdown("<div class='info-panel-content'>", unsafe_allow_html=True)
+    recent_data = df_filtered.sort_values('date').tail(7)
+    rec_info = get_recommendations(recent_data, risk_thresh); status_class = rec_info['status']
+    st.markdown(f"<h3 class='{status_class}'>{rec_info['title']}</h3>", unsafe_allow_html=True)
+    metrics = rec_info['metrics']
+    avg_str = f"{metrics['recent_avg']:.2f}" if pd.notna(metrics['recent_avg']) else "N/A"
+    min_str = f"{metrics['recent_min']:.2f}" if pd.notna(metrics['recent_min']) else "N/A"
+    trend_str = f"{metrics['trend']:+.2f}" if pd.notna(metrics['trend']) else "N/A"
+    var_str = f"{metrics['variability']:.2f}" if pd.notna(metrics['variability']) else "N/A"
+    st.markdown(f"<p class='analysis-text'><b>Analysis (Last {min(7, len(recent_data))} Days):</b> Avg: {avg_str} | Min: {min_str} | Risk Days: {metrics['below_threshold']} | Trend: {trend_str} | Variability: {var_str}</p>", unsafe_allow_html=True)
+    st.markdown("<h4>Recommendations</h4>", unsafe_allow_html=True)
+    if rec_info['recommendations']: st.markdown(f"<ul>{''.join([f'<li>{rec}</li>' for rec in rec_info['recommendations']])}</ul>", unsafe_allow_html=True)
+    else: st.markdown("<p>No specific recommendations available.</p>", unsafe_allow_html=True)
+    insights = calculate_data_insights(df_filtered)
+    if insights:
+        st.markdown("<hr class='insights-separator'>", unsafe_allow_html=True)
+        st.markdown("<h4>Data Insights (Selected Period)</h4>", unsafe_allow_html=True)
+        st.markdown(f"<ul>{''.join([f'<li>{insight}</li>' for insight in insights])}</ul>", unsafe_allow_html=True)
+    st.markdown("<small><i>Note: General recommendations. Adapt based on context.</i></small>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True) # Close info-panel-content
+    st.markdown("</div>", unsafe_allow_html=True) # Close info-panel
 
 def render_footer():
-    st.markdown("""
-    <div class="dashboard-footer">
-        <p>CFC Recovery Insights Dashboard | Version 1.0 | Developed by VIvek Tiwari and Nikhil Negi</p>
-    </div>
-    """, unsafe_allow_html=True)
+    """Renders the dashboard footer."""
+    st.markdown('<div class="dashboard-footer">CFC Recovery Insights Dashboard | Created by: Vivek Tiwari</div>', unsafe_allow_html=True)
 
 
-def main():
-    # Setup sidebar and get parameters
-    results = setup_sidebar()
-    dashboard_view = results[0]
-    all_player_data = results[1]
-    
-    if dashboard_view == "Individual Player":
-        # Unpack individual player view settings
-        _, _, df_player, option, risk_threshold, show_rolling_avg, rolling_window, show_recommendations, show_weekly_summary, show_workload_analysis = results
-        
-        # Filter data based on selected time period
-        end_date = df_player["date"].max()
-        if option == "All":
-            start_date = df_player["date"].min()
-        elif option == "Last 7 days":
-            start_date = end_date - timedelta(days=7)
-        elif option == "Last 14 days":
-            start_date = end_date - timedelta(days=14)
-        elif option == "Last 30 days":
-            start_date = end_date - timedelta(days=30)
-        elif option == "Last 90 days":
-            start_date = end_date - timedelta(days=90)
+# --- Main Application Logic ---
 
+def filter_data_by_period(df_player, period_option):
+    """Filters player data based on the selected time period option."""
+    if df_player is None or df_player.empty: return pd.DataFrame()
+    df_player = df_player.copy()
+    df_player['date'] = pd.to_datetime(df_player['date'], errors='coerce')
+    df_player.dropna(subset=['date'], inplace=True)
+    if df_player.empty: return pd.DataFrame()
+    df_player = df_player.sort_values("date")
+    end_date = df_player["date"].max()
+    if period_option == "All Time": start_date = df_player["date"].min()
+    elif period_option == "Last 7 days": start_date = end_date - timedelta(days=6)
+    elif period_option == "Last 14 days": start_date = end_date - timedelta(days=13)
+    elif period_option == "Last 30 days": start_date = end_date - timedelta(days=29)
+    elif period_option == "Last 90 days": start_date = end_date - timedelta(days=89)
+    else: start_date = end_date - timedelta(days=29)
+    if not df_player.empty:
+        start_date = max(start_date, df_player["date"].min())
         filtered_df = df_player[(df_player["date"] >= start_date) & (df_player["date"] <= end_date)]
-        
-        # Calculate weekly summary data
-        weekly_summary_data = get_weekly_summary(filtered_df, risk_threshold)
-        
-        # Get player name for display
-        player_name = df_player["player_name"].iloc[0] if len(df_player) > 0 else "Unknown Player"
-        
-        # Render individual player dashboard
-        render_header(dashboard_view, player_name)
-        
-        # Render metrics
-        render_metrics(filtered_df, risk_threshold)
-        
-        # Render status box
-        render_status_box(filtered_df, risk_threshold)
-        
-        # Create main content columns
-        left_col, right_col = st.columns([2, 1])
-        
-        with left_col:
-            # Render chart area
-            render_chart_area(filtered_df, risk_threshold, show_rolling_avg, rolling_window, 
-                            weekly_summary_data, show_weekly_summary, player_name)
-        
-        with right_col:
-            if show_recommendations:
-                render_recommendations(filtered_df, risk_threshold, show_recommendations)
-            else:
-                st.info("Recovery recommendations are disabled")
-        
-        # Add some spacing
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        if show_workload_analysis:
-            render_workload_analysis(df_player, filtered_df, risk_threshold)
+        return filtered_df
+    else: return pd.DataFrame()
+
+
+def render_individual_player_view(settings, df_full):
+    """Renders the structured, compact view for the selected individual player."""
+    render_header(settings.dashboard_view, settings.selected_player)
+    if not settings.selected_player:
+        st.info("Please select a player from the sidebar to view their analysis.")
+        return
+    if 'player_name' not in df_full.columns:
+         st.error("Dataframe is missing the 'player_name' column.")
+         return
+    df_player_full = df_full[df_full["player_name"] == settings.selected_player]
+    if df_player_full.empty:
+        st.warning(f"No data found for player: {settings.selected_player}")
+        df_filtered = pd.DataFrame()
+    else: df_filtered = filter_data_by_period(df_player_full, settings.time_period_option)
+    weekly_summary_data = None
+    if settings.show_weekly_summary: weekly_summary_data = get_weekly_summary(df_filtered, settings.risk_threshold)
+    
+    # Render the top metric cards
+    render_metrics(df_filtered, settings.risk_threshold)
+    
+    left_col, right_col = st.columns([3, 2], gap="medium")
+    with left_col:
+        render_chart_area(df_filtered, settings.risk_threshold, settings.show_rolling_avg,
+                          settings.rolling_window, weekly_summary_data, settings.show_weekly_summary,
+                          settings.selected_player)
+    with right_col:
+        if settings.show_recommendations: render_recommendations_panel(df_filtered, settings.risk_threshold)
         else:
-            st.info("Workload analysis is disabled")
-    
-    else:
-        # Team readiness view
-        _, _, _, _, risk_threshold, _, _, _, _, _ = results
-        
-        # Render team readiness dashboard
-        render_header(dashboard_view)
-        
-        # Render team readiness content
-        render_match_readiness_dashboard(all_player_data, risk_threshold)
-    
-    # Render footer
+             st.markdown("<div class='content-block info-panel'><h4 class='info-panel-title'>Analysis & Recommendations</h4><div class='info-panel-content'><p>Recovery recommendations panel is hidden via sidebar options.</p></div></div>", unsafe_allow_html=True) # Simplified placeholder
+
+# --- App Execution ---
+def main():
+    """Main function to run the Streamlit app."""
+    # --- Initial Data Load Attempt ---
+    initial_df = None
+    try:
+        initial_df = pd.read_csv("cleaned_data/cleaned_CFC_Recovery_Status_Data.csv")
+        initial_df["date"] = pd.to_datetime(initial_df["date"], errors='coerce')
+    except FileNotFoundError:
+        initial_df = generate_sample_data()
+    except Exception as e:
+         st.sidebar.error(f"Error loading default data: {e}")
+         initial_df = generate_sample_data()
+
+    if initial_df is None or initial_df.empty:
+         st.sidebar.error("Could not load or generate initial data.")
+         st.error("Fatal Error: Could not load or generate any data to proceed.")
+         st.stop()
+
+    # --- Setup Sidebar (passes initial_df for player list) ---
+    settings = setup_sidebar(initial_df)
+
+    # --- Load Data Based on Upload ---
+    df_display = get_data(settings.uploaded_file) # This uses the cache
+
+    # --- Critical Check: Ensure display data is a DataFrame ---
+    if df_display is None or df_display.empty:
+        st.error("❌ Data loading or generation failed after sidebar setup. Dashboard cannot proceed.")
+        st.stop()
+    if not isinstance(df_display, pd.DataFrame):
+        st.error(f"❌ Loaded data is not a DataFrame (Type: {type(df_display)}). Cannot proceed.")
+        st.stop()
+
+    # --- Render Content ---
+    if settings.dashboard_view == "Individual Player":
+        render_individual_player_view(settings, df_display)
+    else: # Team Readiness View
+        render_header(settings.dashboard_view)
+        if all(col in df_display.columns for col in ['player_name', 'date', 'emboss_baseline_score']):
+             render_match_readiness_dashboard(df_display, settings.risk_threshold)
+        else:
+            st.error("Required columns ('player_name', 'date', 'emboss_baseline_score') missing from data for Team Readiness view.")
+
     render_footer()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        st.error("An unexpected error occurred in the main execution:")
+        st.exception(e)
